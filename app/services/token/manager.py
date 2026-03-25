@@ -596,6 +596,23 @@ class TokenManager:
             if isinstance(e, UpstreamException):
                 status = e.details.get("status") if e.details else getattr(e, "status_code", None)
                 is_token_expired = e.details.get("is_token_expired", False) if e.details else False
+
+                if is_token_expired:
+                    error_text = ""
+                    if isinstance(e.details, dict):
+                        error_text = str(
+                            e.details.get("grpc_message") or e.details.get("body") or ""
+                        ).lower()
+                    reason = (
+                        "unauthorized:blocked-user"
+                        if "unauthorized:blocked-user" in error_text
+                        else "rate_limits_auth_failed"
+                    )
+                    await self.mark_expired(token_str, reason)
+                    logger.warning(
+                        f"Token {raw_token[:10]}...: API sync failed (Confirmed Token Expired), skipping fallback"
+                    )
+                    return False
                 
                 if status == 401:
                     # 只要是 401，都应该记录一次失败，增加 fail_count
@@ -675,6 +692,27 @@ class TokenManager:
                 return True
 
         logger.warning(f"Token {raw_token[:10]}...: not found for failure record")
+        return False
+
+    async def mark_expired(self, token_str: str, reason: str = "") -> bool:
+        """Mark a token as expired immediately."""
+        raw_token = token_str.replace("sso=", "")
+
+        for pool in self.pools.values():
+            token = pool.get(raw_token)
+            if token:
+                token.status = TokenStatus.EXPIRED
+                token.last_fail_at = int(datetime.now().timestamp() * 1000)
+                token.last_fail_reason = reason or token.last_fail_reason
+                token.fail_count = max(token.fail_count, 1)
+                logger.warning(
+                    f"Token {raw_token[:10]}...: marked as expired - {reason or 'unknown'}"
+                )
+                self._track_token_change(token, pool.name, "state")
+                self._schedule_save()
+                return True
+
+        logger.warning(f"Token {raw_token[:10]}...: not found for expire mark")
         return False
 
     async def mark_rate_limited(self, token_str: str) -> bool:
@@ -1035,19 +1073,31 @@ class TokenManager:
                         "expired": False,
                     }
 
-                if status == 401:
-                    is_token_expired = (
-                        isinstance(error, UpstreamException)
-                        and isinstance(error.details, dict)
-                        and error.details.get("is_token_expired", False)
+                is_token_expired = (
+                    isinstance(error, UpstreamException)
+                    and isinstance(error.details, dict)
+                    and error.details.get("is_token_expired", False)
+                )
+                if is_token_expired:
+                    error_text = str(
+                        error.details.get("grpc_message") or error.details.get("body") or ""
+                    ).lower()
+                    reason = (
+                        "unauthorized:blocked-user"
+                        if "unauthorized:blocked-user" in error_text
+                        else "rate_limits_auth_failed"
                     )
-                    if is_token_expired:
-                        logger.error(
-                            f"Token {token_info.token[:10]}...: confirmed expired after refresh, "
-                            f"marking as expired"
-                        )
-                        token_info.status = TokenStatus.EXPIRED
-                        return {"recovered": False, "expired": True}
+                    logger.error(
+                        f"Token {token_info.token[:10]}...: confirmed expired after refresh, "
+                        f"marking as expired"
+                    )
+                    token_info.status = TokenStatus.EXPIRED
+                    token_info.last_fail_at = int(datetime.now().timestamp() * 1000)
+                    token_info.last_fail_reason = reason
+                    token_info.fail_count = max(token_info.fail_count, 1)
+                    return {"recovered": False, "expired": True}
+
+                if status == 401:
                     logger.warning(
                         f"Token {token_info.token[:10]}...: 401 during refresh but not confirmed expired, "
                         f"keeping current status"

@@ -28,6 +28,12 @@ def _get_nsfw_semaphore() -> asyncio.Semaphore:
     return _NSFW_SEMAPHORE
 
 
+def _is_blocked_user_error(err: UpstreamException) -> bool:
+    details = err.details if isinstance(err.details, dict) else {}
+    grpc_message = str(details.get("grpc_message") or "").lower()
+    return "unauthorized:blocked-user" in grpc_message
+
+
 class NSFWService:
     """NSFW 模式服务"""
     @staticmethod
@@ -50,6 +56,9 @@ class NSFWService:
                             status = err.details["status"]
                         else:
                             status = getattr(err, "status_code", None)
+                        if _is_blocked_user_error(err):
+                            await mgr.mark_expired(token, "unauthorized:blocked-user")
+                            return status or 0
                         if status == 401:
                             await mgr.record_fail(token, status, reason)
                         return status or 0
