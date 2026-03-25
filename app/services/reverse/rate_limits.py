@@ -37,7 +37,10 @@ def _classify_rate_limits_failure(
 
     is_token_expired = False
     if "application/json" in content_type:
-        if "unauthorized:blocked-user" in body_lower:
+        if (
+            "unauthorized:blocked-user" in body_lower
+            or "account:email-domain-rejected" in body_lower
+        ):
             is_token_expired = True
         elif status_code == 401:
             auth_error_keywords = [

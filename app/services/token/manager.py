@@ -606,7 +606,11 @@ class TokenManager:
                     reason = (
                         "unauthorized:blocked-user"
                         if "unauthorized:blocked-user" in error_text
-                        else "rate_limits_auth_failed"
+                        else (
+                            "account:email-domain-rejected"
+                            if "account:email-domain-rejected" in error_text
+                            else "rate_limits_auth_failed"
+                        )
                     )
                     await self.mark_expired(token_str, reason)
                     logger.warning(
@@ -1085,7 +1089,11 @@ class TokenManager:
                     reason = (
                         "unauthorized:blocked-user"
                         if "unauthorized:blocked-user" in error_text
-                        else "rate_limits_auth_failed"
+                        else (
+                            "account:email-domain-rejected"
+                            if "account:email-domain-rejected" in error_text
+                            else "rate_limits_auth_failed"
+                        )
                     )
                     logger.error(
                         f"Token {token_info.token[:10]}...: confirmed expired after refresh, "
